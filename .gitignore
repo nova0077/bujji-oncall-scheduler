@@ -1,0 +1,41 @@
+/target
+/classes
+/checkouts
+profiles.clj
+pom.xml
+pom.xml.asc
+*.jar
+*.class
+/.lein-*
+/.nrepl-port
+/.prepl-port
+.hgignore
+.hg/
+
+# Ignore .DS_Store files (common on macOS)
+.DS_Store
+
+# Ignore clj-kondo cache files
+.clj-kondo/
+
+# Ignore lsp cache files
+.lsp/
+
+# Ignore IntelliJ IDEA project files (if applicable)
+.idea/
+*.iml
+
+# Ignore all compiled class files (Java, Clojure)
+*.class
+
+# Ignore temporary files created by the REPL or editor
+*.swp
+*.swo
+*~
+
+# Ignore logs
+*.log
+firestore-debug.log
+
+# Ignore JSON service account keys (if sensitive)
+resources/service_accountkey.json
