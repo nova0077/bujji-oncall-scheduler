@@ -68,7 +68,8 @@
    ["id" id-string]
    ["org_id" id-string]
    ["name" info-string]
-   ["users" [:vector id-string]]
+   ["users" [:map
+             id-string [:vector id-string]]]
    ["admins" {:optional true} [:vector id-string]]])
 
 

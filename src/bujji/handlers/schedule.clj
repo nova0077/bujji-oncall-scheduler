@@ -5,9 +5,9 @@
 
 
 (defn get-schedule
-  [id]
+  [params]
   (res/response (bjm/fetch-by-id "schedule"
-                                 id)))
+                                 (get params "id"))))
 
 
 (defn create-schedule

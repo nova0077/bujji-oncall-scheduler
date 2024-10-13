@@ -2,16 +2,30 @@
   (:require [bujji.models :as bjm]))
 
 
+(defn get-permutations
+  [l]
+  (cond (= (count l) 1)
+        (list l)
+        :else
+        (apply concat
+               (map (fn [head]
+                      (map (fn [tail]
+                             (cons head tail))
+                           (get-permutations (remove #{head} l))))
+                    l))))
+
+
 (defn get-team-wise-users
   "Fetches the user list for each team from the database."
-  [teams]
+  [teams org-id]
   (reduce
    (fn [team-user-map team-id]
      (assoc team-user-map
             (keyword team-id)
-            (get (bjm/fetch-by-id "teams"
-                                   team-id)
-                 "users")))
+            (get (get (bjm/fetch-by-id "teams"
+                                       team-id)
+                      "users")
+                 org-id)))
    {}
    teams))
 
@@ -27,27 +41,66 @@
        acc))
    []
    users))
+ 
+
+(defn sort-users-by-future-leaves
+  ;; Sort users by the number of future leaves in descending order
+  [users-list week-num user-leaves]
+  (let [user-count-pairs (map (fn [user-id]
+                                (let [leaves ((keyword user-id) user-leaves)
+                                      future-leaves-cnt (if (seq leaves)
+                                                          (reduce (fn [acc leave-num]
+                                                                    (if (and (seq leave-num)
+                                                                             (> (Integer/parseInt (str leave-num))
+                                                                                (Integer/parseInt (str (name week-num)))))
+                                                                      (inc acc)
+                                                                      acc))
+                                                                  0
+                                                                  leaves)
+                                                          0)]
+                                  [user-id future-leaves-cnt]))
+                              users-list)
+        sorted-users (sort-by second > user-count-pairs)]
+    (map first sorted-users)))
 
 
 (defn get-oncall-member
   "Selects the most appropriate user for on-call duty based on their current on-call count."
-  [to-get available-users user-oncall-cnt & [except-id]]
-  (let [user-data (reduce
-                   (fn [acc user-id]
-                     (let [oncall-cnt (get user-oncall-cnt
-                                           user-id 0)]
-                       (cond
-                         (= user-id except-id) acc
-                         (= oncall-cnt 0) (assoc acc :0 user-id)
-                         (= oncall-cnt 1) (assoc acc :1 user-id)
-                         (= oncall-cnt 2) (assoc acc :2 user-id))))
-                   {}
-                   available-users)]
-    (cond
-      (:0 user-data) (:0 user-data)
-      (:1 user-data) (:1 user-data)
-      (= to-get "secondary") (:2 user-data)
-      :else nil)))
+  [week-id available-users user-oncall-cnt user-leaves-map
+   & {:keys [except-id]
+      :or {except-id nil}}]
+  (let [users-data (reduce
+                    (fn [acc user-id]
+                      (let [oncall-cnt (-> (get @user-oncall-cnt
+                                                user-id "0")
+                                           str
+                                           keyword)]
+                        (if (= user-id except-id)
+                          acc
+                          (assoc acc
+                                 oncall-cnt
+                                 (conj (oncall-cnt acc) user-id)))))
+                    {}
+                    available-users)
+        users-with-less-oncall-cnt (-> (reduce-kv (fn [acc cnt users]
+                                                    (cond
+                                                      (nil? (seq acc))
+                                                      {cnt users}
+
+                                                      (< (Integer/parseInt (name cnt))
+                                                         (Integer/parseInt (name (first (keys acc)))))
+                                                      {cnt users}
+
+                                                      :else
+                                                      acc))
+                                                  {}
+                                                  users-data)
+                                       vals
+                                       first)
+        sorted-users (sort-users-by-future-leaves users-with-less-oncall-cnt
+                                                  week-id
+                                                  user-leaves-map)]
+    (first sorted-users)))
 
 
 (defn get-user-leaves
@@ -90,65 +143,50 @@
                   week-num)))
 
 
-(defn update-team-oncall
-  "Updates the team on-call data with new primary or secondary users for the specified weeks."
-  [team-oncall-data week-num week-id key primary secondary]
-  (swap! team-oncall-data assoc
-         week-num {key primary}
-         week-id {:primary primary
-                  :secondary secondary}))
-
-
-(defn evaluate-replacement
-  "Evaluates whether a replacement is necessary and updates the team on-call data."
-  [team-oncall-data week-num week-id to-key key available? replacement primary secondary]
-  (when (and (= to-key key) available? replacement)
-    (update-team-oncall team-oncall-data
-                        week-num
-                        week-id
-                        key primary secondary)))
-
-
 (defn reschedule-oncall
   "Attempts to reschedule on-call users when availability issues arise."
-  [to-key week-num users team-oncall-data user-leaves-map user-oncall-cnt]
+  [week-num users team-oncall-data user-leaves-map user-oncall-cnt teams-schedule team-id]
   (doseq [[week-id oncall-data] @team-oncall-data]
-    (let [p-id (:primary oncall-data)
-          s-id (:secondary oncall-data)
-          p-available? (check-user-availability p-id week-num user-leaves-map)
-          s-available? (check-user-availability s-id week-num user-leaves-map)
-          p-replacement (get-oncall-member "primary"
-                                           (get-available-users users week-id user-leaves-map)
-                                           @user-oncall-cnt
-                                           p-id)
-          s-replacement (get-oncall-member "secondary"
-                                           (get-available-users users week-id user-leaves-map)
-                                           @user-oncall-cnt
-                                           s-id)]
-      (when-not (nil? (to-key @team-oncall-data))
-        (println "Stopping the process as condition is met.")
-        (reduced nil))
-      (evaluate-replacement team-oncall-data week-num
-                            week-id to-key
-                            :primary p-available?
-                            p-replacement p-id s-id)
-      (evaluate-replacement team-oncall-data week-num
-                            week-id to-key
-                            :primary p-available?
-                            s-replacement p-id s-id)
-      (evaluate-replacement team-oncall-data week-num
-                            week-id to-key
-                            :secondary s-available?
-                            s-replacement s-id p-id)
-      (evaluate-replacement team-oncall-data week-num
-                            week-id to-key
-                            :secondary s-available?
-                            p-replacement s-id p-id))))
+    (when (= (week-id teams-schedule)
+             team-id)
+      (let [p-id (:primary oncall-data)
+            p-available? (check-user-availability p-id
+                                                  week-num
+                                                  user-leaves-map)
+            p-replacement (get-oncall-member week-id
+                                             (get-available-users users
+                                                                  week-id
+                                                                  user-leaves-map)
+                                             @user-oncall-cnt
+                                             user-leaves-map
+                                             :except-id p-id)]
+        (when (and (week-num @team-oncall-data)
+                   p-available?
+                   p-replacement)
+          (swap! team-oncall-data
+                 assoc
+                 week-num {key p-id}
+                 week-id {:primary p-id})))))
+  (week-num @team-oncall-data))
+
+
+(defn update-oncall-data
+  "Updates the team-oncall-data and user-oncall-cnt atoms with primary and
+  secondary on-call members."
+  [week-num primary-oncall team-oncall-data user-oncall-cnt]
+  (swap! team-oncall-data
+         assoc week-num {:primary primary-oncall})
+
+  (swap! user-oncall-cnt
+         update primary-oncall
+         (fnil inc 0))
+
+  {:primary primary-oncall})
 
 
 (defn assign-members
   "Assigns on-call members to teams for each week, rescheduling when necessary."
-  [team-schedule team-user-map user-leaves-map]
+  [team-schedule team-user-map user-leaves-map compromise?]
   (let [user-oncall-cnt (atom {})
         team-oncall-data (atom {})]
     (reduce-kv
@@ -158,35 +196,43 @@
              available-users (get-available-users users
                                                   week-num
                                                   user-leaves-map)
-             primary-oncall (or (get-oncall-member "primary"
+             primary-oncall (or (get-oncall-member week-num
                                                    available-users
-                                                   @user-oncall-cnt)
-                                (reschedule-oncall :primary
-                                                   week-num
+                                                   user-oncall-cnt
+                                                   user-leaves-map)
+                                (reschedule-oncall week-num
                                                    users
                                                    team-oncall-data
                                                    user-leaves-map
-                                                   user-oncall-cnt))
-             secondary-oncall (or (get-oncall-member "secondary"
-                                                     (remove #(= % primary-oncall) available-users)
-                                                     @user-oncall-cnt)
-                                  (reschedule-oncall :secondary
-                                                     week-num
-                                                     users
-                                                     team-oncall-data
-                                                     user-leaves-map
-                                                     user-oncall-cnt))]
-         (swap! team-oncall-data assoc week-num {:primary primary-oncall
-                                                 :secondary secondary-oncall})
-         (swap! user-oncall-cnt
-                update primary-oncall
-                (fnil inc 0))
-         (when-not (= primary-oncall secondary-oncall)
-           (swap! user-oncall-cnt
-                  update secondary-oncall
-                  (fnil inc 0)))
-         (assoc result week-num {:primary primary-oncall
-                                 :secondary secondary-oncall})))
+                                                   user-oncall-cnt
+                                                   team-schedule
+                                                   team-id))
+             all-available-users (get-available-users (keys user-leaves-map)
+                                                      week-num
+                                                      user-leaves-map)
+             compromised-primary-oncall (get-oncall-member week-num
+                                                           all-available-users
+                                                           user-oncall-cnt
+                                                           user-leaves-map)]
+         (cond
+           (= primary-oncall nil)
+           ;; indicates rescheduling is not possible
+           ;; option1: assign this week oncall to any other person irrespective to team
+           (if compromise?
+             (assoc result
+                    week-num (update-oncall-data week-num
+                                                 compromised-primary-oncall
+                                                 team-oncall-data
+                                                 user-oncall-cnt))
+             (assoc result
+                    :success false))
+
+           :else
+           (assoc result
+                  week-num (update-oncall-data week-num
+                                               primary-oncall
+                                               team-oncall-data
+                                               user-oncall-cnt)))))
      {}
      team-schedule)))
 
@@ -195,46 +241,54 @@
   [schedule user-leaves-map]
   (reduce-kv
    (fn [acc week-id data]
-     (let [p-id (keyword (:primary data))
-           s-id (keyword (:secondary data))]
-       (if (or (contains? (p-id user-leaves-map)
-                          (name week-id))
-               (contains? (s-id user-leaves-map)
-                          (name week-id)))
-         (assoc acc :success false)
-         acc)))
+     (let [p-id (keyword (:primary data))]
+       (if (contains? (p-id user-leaves-map)
+                           (name week-id))
+           (assoc acc :success false)
+           acc)))
    {}
    schedule))
 
 
-(defn build-schedule
-  "Creates the on-call schedule for all teams, handling availability and assignment."
-  [org-id start-week end-week]
-  (let [org-details (bjm/fetch-by-id "orgs"
-                                     org-id)
-        teams (get org-details
-                   "teams")
-        team-schedule (assign-teams teams
-                                    start-week
-                                    end-week)
-        team-user-map (get-team-wise-users teams)
+(defn try-schedule
+  [org-id teams teams-schedule compromise?]
+  (let [team-user-map (get-team-wise-users teams
+                                           org-id)
         user-leaves-map (get-user-leaves team-user-map)
-        schedule-with-uids (assign-members team-schedule
+        schedule-with-uids (assign-members teams-schedule
                                            team-user-map
-                                           user-leaves-map)]
+                                           user-leaves-map
+                                           compromise?)]
     (reduce-kv
      (fn [acc week-id oncall-data]
-       (let [p-data (bjm/fetch-by-id "profiles"
-                                     (:primary oncall-data))
-             p-username (get p-data "username")
-             s-data (bjm/fetch-by-id "profiles"
-                                     (:secondary oncall-data))
-             s-username (get s-data "username")]
+       (let [p-id (:primary oncall-data)
+             p-data (if p-id
+                          (bjm/fetch-by-id "profiles"
+                                             p-id)
+                          nil)
+             p-username (get p-data "username" "not-found")]
          (assoc acc
-                week-id {:primary p-username
-                         :secondary s-username})))
+                week-id {:primary p-username})))
      {}
      schedule-with-uids)))
 
 
-(comment (println (build-schedule "org1" 38 52)))
+(defn build-schedule
+  "Creates the on-call schedule for all teams, handling availability and assignment."
+  [org-id start-week end-week compromise?]
+  (let [org-details (bjm/fetch-by-id "orgs" org-id)
+        teams (get org-details "teams")
+        team-permutations (get-permutations teams)]
+    (reduce (fn [acc team-permutation]
+              (let [schedule (try-schedule org-id
+                                           team-permutation
+                                           (assign-teams team-permutation
+                                                         start-week
+                                                         end-week)
+                                           compromise?)]
+                (assoc acc team-permutation schedule)))
+            {}
+            team-permutations)))
+
+
+(println (build-schedule "org2" 38 52 false))

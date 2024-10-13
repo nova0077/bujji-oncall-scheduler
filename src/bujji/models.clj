@@ -51,7 +51,8 @@
               (fs/add! (assoc config
                               "created_at" (fs/server-timestamp)
                               "updated_at" (fs/server-timestamp))))
-          "Doc created successfully")
+          {:success true
+           :msg "Doc created successfully"})
         valid-schema))
     (catch Exception e
       (log/error "Error creating document: " (.getMessage e))

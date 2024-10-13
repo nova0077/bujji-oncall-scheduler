@@ -4,6 +4,6 @@
 
 
 (defn get-request
-  [id]
+  [params]
   (rur/response (bjm/fetch-by-id "requests"
-                                 id)))
+                                 (get params "id"))))

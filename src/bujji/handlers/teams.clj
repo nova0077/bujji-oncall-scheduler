@@ -7,7 +7,8 @@
 (defn get-team
   [params]
   (try
-    (let [result (bjm/fetch-by-id "teams" params)]
+    (let [result (bjm/fetch-by-id "teams"
+                                  (get params "id"))]
       (res/response {:status 200
                      :result result}))
     (catch Exception e

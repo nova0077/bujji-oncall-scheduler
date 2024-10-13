@@ -13,7 +13,8 @@
   "Fetches an organization by its ID from Firestore."
   [params]
   (try
-    (let [result (bjm/fetch-by-id "orgs" params)]
+    (let [result (bjm/fetch-by-id "orgs"
+                                  (get params "id"))]
       (res/response {:status 200
                      :result result}))
     (catch Exception e
