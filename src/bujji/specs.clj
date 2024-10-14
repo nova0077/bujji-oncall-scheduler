@@ -68,7 +68,7 @@
    ["id" id-string]
    ["org_id" id-string]
    ["name" info-string]
-   ["users" [:map
+   ["users" [:map-of
              id-string [:vector id-string]]]
    ["admins" {:optional true} [:vector id-string]]])
 
@@ -95,7 +95,7 @@
        :error-msg (str "Exception occurred: " (.getMessage e))})))
 
 
-(mg/generate profile-schema)
+(mg/generate org-schema)
 
 (validate-schema :requests {:abc 12})
 
